@@ -4,6 +4,14 @@ version = "0.1.1"
 edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.85"
+authors = ["wist Dev Team"]
+description = "Shared runtime helpers for the wist ecosystem: filesystem, ids, paths, time, and primitives"
+repository = "https://github.com/dayu-sec/wist-shared"
+homepage = "https://github.com/dayu-sec/wist-shared"
+documentation = "https://docs.rs/wist-shared"
+readme = "README.md"
+keywords = ["wist", "helpers", "filesystem", "time"]
+categories = ["development-tools", "filesystem", "config"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
