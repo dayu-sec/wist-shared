@@ -4,11 +4,15 @@ pub type Int = i64;
 pub type Bool = bool;
 pub type Float = f64;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, ::serde::Serialize, ::serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, ::serde::Serialize, ::serde::Deserialize,
+)]
 pub struct DateTime(chrono::DateTime<chrono::Utc>);
 
 impl DateTime {
-    pub fn now() -> Self { Self(chrono::Utc::now()) }
+    pub fn now() -> Self {
+        Self(chrono::Utc::now())
+    }
     /// `days` 天后的时刻（如注册 Token 有效期）。
     pub fn in_days(days: i64) -> Self {
         Self(
@@ -18,7 +22,9 @@ impl DateTime {
         )
     }
     pub fn from_rfc3339(value: &str) -> Option<Self> {
-        chrono::DateTime::parse_from_rfc3339(value).ok().map(|v| Self(v.with_timezone(&chrono::Utc)))
+        chrono::DateTime::parse_from_rfc3339(value)
+            .ok()
+            .map(|v| Self(v.with_timezone(&chrono::Utc)))
     }
     /// 取底层 chrono 值（如 sqlx TIMESTAMPTZ 绑定）。
     pub fn to_chrono(&self) -> chrono::DateTime<chrono::Utc> {
@@ -33,5 +39,7 @@ impl DateTime {
 pub struct Secret(String);
 
 impl std::fmt::Debug for Secret {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("Secret(***)") }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(***)")
+    }
 }
