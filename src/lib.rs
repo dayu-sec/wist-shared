@@ -6,6 +6,7 @@ pub mod ids;
 pub mod integrity;
 pub mod paths;
 pub mod primitives;
+pub mod records;
 pub mod time;
 
 pub use primitives::*;
