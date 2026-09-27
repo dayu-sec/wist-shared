@@ -945,4 +945,208 @@ mod tests {
             "2026-09-23 20:24:24+08 MBP softwareupdated[565]: Setting up (\n\t\"<SUOSUProduct: MSU>\",\n\t)\n"
         );
     }
+
+    // ── 契约、状态交接与补充不变量 ──────────────────────────────────────────
+
+    #[test]
+    fn limits_new_clamps_both_fields_to_at_least_one() {
+        let clamped = Limits::new(0, 0);
+        assert_eq!(clamped.max_lines, 1);
+        assert_eq!(clamped.max_bytes, 1);
+        assert_eq!(
+            Limits::new(5, 9),
+            Limits {
+                max_lines: 5,
+                max_bytes: 9,
+            }
+        );
+    }
+
+    #[test]
+    fn pending_exposes_the_open_record_without_sealing_it() {
+        let one = "2026-09-23 20:24:24+08 host a: one\n";
+        let cont = "\tcont\n";
+        let mut delimiter = anchored();
+        assert!(delimiter.push(line(one, 0), anchor).is_none());
+        assert!(
+            delimiter
+                .push(line(cont, one.len() as u64), anchor)
+                .is_none()
+        );
+
+        let pending = delimiter.pending().expect("pending");
+        assert_eq!(pending.body, format!("{one}{cont}"));
+        assert_eq!(pending.lines, 2);
+        assert_eq!(pending.start_offset, 0);
+        assert_eq!(pending.end_offset, (one.len() + cont.len()) as u64);
+        assert_eq!(delimiter.emitted(), 0, "pending 不算已产出");
+        assert!(delimiter.is_accumulating());
+    }
+
+    #[test]
+    fn into_pending_hands_over_content_and_is_none_when_idle() {
+        assert!(anchored().into_pending().is_none());
+
+        let one = "2026-09-23 20:24:24+08 host a: one\n";
+        let mut delimiter = anchored();
+        assert!(delimiter.push(line(one, 0), anchor).is_none());
+        let taken = delimiter.into_pending().expect("pending");
+        assert_eq!(taken.body, one);
+        assert_eq!(taken.lines, 1);
+    }
+
+    #[test]
+    fn resume_takes_the_record_as_is_and_resets_counters() {
+        let one = "2026-09-23 20:24:24+08 host a: one\n";
+        let record = Record {
+            body: one.to_string(),
+            start_offset: 10,
+            end_offset: 10 + one.len() as u64,
+            lines: 1,
+            // completion 只是占位：resume / flush 会按封口方式改写它。
+            completion: Completion::Oversized,
+        };
+        let mut delimiter = Delimiter::resume(Limits::new(10, 4096), Start::WaitForStart, record);
+        assert_eq!(delimiter.dropped_lines(), 0);
+        assert_eq!(delimiter.dropped_bytes(), 0);
+        assert_eq!(delimiter.emitted(), 0);
+        assert!(delimiter.is_accumulating());
+
+        let sealed = delimiter.flush().expect("flush");
+        assert_eq!(sealed.completion, Completion::Deadline);
+        assert_eq!(sealed.body, one);
+        assert_eq!(sealed.start_offset, 10);
+        assert_eq!(sealed.end_offset, 10 + one.len() as u64);
+        assert_eq!(delimiter.emitted(), 1);
+    }
+
+    #[test]
+    fn completion_and_record_serde_contract() {
+        // 枚举用外部标签，名字就是契约（checkpoint 存盘依赖它）。
+        assert_eq!(
+            serde_json::to_string(&Completion::Boundary).expect("serialize"),
+            "\"Boundary\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Completion::Deadline).expect("serialize"),
+            "\"Deadline\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Completion::Oversized).expect("serialize"),
+            "\"Oversized\""
+        );
+        assert_eq!(
+            serde_json::from_str::<Completion>("\"Oversized\"").expect("deserialize"),
+            Completion::Oversized
+        );
+
+        // 未知字段被忽略；缺字段报错（Record 没有默认值）。
+        let with_extra = r#"{"body":"x\n","start_offset":0,"end_offset":2,"lines":1,"completion":"Boundary","future":42}"#;
+        let record: Record = serde_json::from_str(with_extra).expect("未知字段应被忽略");
+        assert_eq!(record.body, "x\n");
+        assert_eq!(record.completion, Completion::Boundary);
+
+        let missing = r#"{"body":"x\n","start_offset":0,"end_offset":2,"lines":1}"#;
+        assert!(
+            serde_json::from_str::<Record>(missing).is_err(),
+            "缺 completion 应当报错"
+        );
+    }
+
+    /// 混合开始型 / 结束型信号时的守恒律：每个输入字节要么在某条记录里，
+    /// 要么被计入丢弃，要么属于结束信号本身（它是间隔，不算内容）。
+    #[test]
+    fn end_signals_are_separators_so_their_bytes_are_accounted_for_separately() {
+        let shapes = [
+            "2026-09-23 20:24:24+08 host a: anchor line\n",
+            "\tcontinuation\n",
+            "    another continuation\n",
+            "\n", // 结束信号
+        ];
+        let signal = |line: &str| {
+            if line.trim().is_empty() {
+                Boundary::Ends
+            } else if anchor(line) == Boundary::Starts {
+                Boundary::Starts
+            } else {
+                Boundary::Neither
+            }
+        };
+
+        let mut rng = Rng(0x0bad_c0de_dead_beef);
+        let mut input = String::new();
+        let mut lines: Vec<(&str, u64)> = Vec::new();
+        for _ in 0..400 {
+            let text = shapes[rng.pick(shapes.len())];
+            lines.push((text, input.len() as u64));
+            input.push_str(text);
+        }
+        // 以结束信号收尾，逼出"到期封口"。
+        lines.push((shapes[3], input.len() as u64));
+        input.push_str(shapes[3]);
+
+        let mut delimiter = Delimiter::new(Limits::new(3, 48), Start::WaitForStart);
+        let mut records = Vec::new();
+        let mut index = 0;
+        while index < lines.len() {
+            let batch = 1 + rng.pick(4);
+            for (text, start) in &lines[index..(index + batch).min(lines.len())] {
+                if let Some(record) = delimiter.push(line(text, *start), signal) {
+                    records.push(record);
+                }
+            }
+            index += batch;
+        }
+
+        // 自证走到了各条路径，否则这个性质测试是空转的。
+        assert!(
+            records
+                .iter()
+                .any(|record| record.completion == Completion::Oversized),
+            "应当走到过超限路径"
+        );
+        assert!(delimiter.dropped_bytes() > 0, "应当走到过丢弃路径");
+
+        let separators: u64 = lines
+            .iter()
+            .filter(|(text, _)| signal(text) == Boundary::Ends)
+            .map(|(text, _)| text.len() as u64)
+            .sum();
+        assert!(separators > 0, "必须真的出现过结束信号");
+
+        for record in &records {
+            assert_eq!(
+                record.body,
+                input[record.start_offset as usize..record.end_offset as usize],
+                "记录的正文必须与它的区间逐字节对得上"
+            );
+        }
+        let covered: u64 = records
+            .iter()
+            .map(|record| record.end_offset - record.start_offset)
+            .sum();
+        assert_eq!(
+            covered + delimiter.dropped_bytes() as u64 + separators,
+            input.len() as u64,
+            "有字节去向不明（既不在记录里，也没计入丢弃或间隔）"
+        );
+
+        // 换成结束型起点再验一次守恒：此时除了超限外不应再有"没有头"的丢弃。
+        let mut collecting = Delimiter::new(Limits::new(3, 48), Start::Collect);
+        let mut records = Vec::new();
+        for (text, start) in &lines {
+            if let Some(record) = collecting.push(line(text, *start), signal) {
+                records.push(record);
+            }
+        }
+        records.extend(collecting.flush());
+        let covered: u64 = records
+            .iter()
+            .map(|record| record.end_offset - record.start_offset)
+            .sum();
+        assert_eq!(
+            covered + collecting.dropped_bytes() as u64 + separators,
+            input.len() as u64
+        );
+    }
 }

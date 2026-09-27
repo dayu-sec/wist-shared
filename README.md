@@ -23,6 +23,7 @@ internal dependencies, so it can be used from any component.
 | `paths`       | Well-known file and directory names (workdir files, config, …).|
 | `time`        | RFC 3339 timestamps and time helpers.                          |
 | `primitives`  | Cross-domain scalar wrappers (`DateTime`, `Secret`, `Int`, `Bool`, `Float`). |
+| `records`     | Record delimitation: folds a line stream into records (multi-line log folding). |
 | `integrity`   | Development-only local integrity helpers.                      |
 | `error_codes` | Shared error-code placeholders.                                |
 
