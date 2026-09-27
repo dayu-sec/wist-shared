@@ -1,9 +1,8 @@
 [package]
 name = "wist-shared"
-version = "0.1.2"  #@gxl:set(version)
+version = "0.1.3"  #@gxl:set(version)
 edition = "2024"
 license = "Apache-2.0"
-rust-version = "1.85"
 authors = ["wist Dev Team"]
 description = "Shared runtime helpers for the wist ecosystem: filesystem, ids, paths, time, and primitives"
 repository = "https://github.com/dayu-sec/wist-shared"
